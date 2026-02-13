@@ -1,0 +1,57 @@
+version: "3.8"
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: message_broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./Docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+    restart: unless-stopped
+
+  postgres:
+    image: timescale/timescaledb:latest-pg18
+    container_name: timescale_db
+    environment:
+      POSTGRES_DB: simulator
+      POSTGRES_USER: simulator
+      POSTGRES_PASSWORD: qwerty123!@#QWERTY
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: SimulatorApp/SimulatorApp.Emulator/Dockerfile
+    container_name: devices_emulator
+    depends_on:
+      - mosquitto
+    environment:
+      - Mqtt__Host=mosquitto
+      - Mqtt__Port=1883
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: SimulatorApp/SimulatorApp.Web/Dockerfile
+    container_name: blazor_webapp
+    depends_on:
+      - mosquitto
+      - postgres
+    ports:
+      - "8080:8080"
+    environment:
+      - Mqtt__Host=mosquitto
+      - Mqtt__Port=1883
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=simulator;Username=simulator;Password=qwerty123!@#QWERTY
+    restart: unless-stopped
+
+volumes:
+  mosquitto_data:
+  postgres_data:
