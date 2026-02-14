@@ -1,4 +1,6 @@
-﻿namespace SimulatorApp.Core.Models;
+﻿using SimulatorApp.Core.Enums;
+
+namespace SimulatorApp.Core.Models;
 
 public class TelemetryLog
 {
