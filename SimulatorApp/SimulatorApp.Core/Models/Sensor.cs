@@ -19,4 +19,6 @@ public class Sensor
     public List<TelemetryLog> Telemetries { get; set; } = new();
 
     public List<StateChangeLog> StateChanges { get; set; } = new();
+
+    public List<StatusChangeLog> StatusChanges { get; set; } = new();
 }
