@@ -1,4 +1,6 @@
-﻿namespace SimulatorApp.Core.Models;
+﻿using SimulatorApp.Core.Enums;
+
+namespace SimulatorApp.Core.Models;
 
 public class Sensor
 {
@@ -16,9 +18,9 @@ public class Sensor
 
     public Device Device { get; set; } = default!;
 
-    public List<TelemetryLog> Telemetries { get; set; } = new();
+    public List<TelemetryLog> Telemetries { get; set; } = [];
 
-    public List<StateChangeLog> StateChanges { get; set; } = new();
+    public List<StateChangeLog> StateChanges { get; set; } = [];
 
-    public List<StatusChangeLog> StatusChanges { get; set; } = new();
+    public List<StatusChangeLog> StatusChanges { get; set; } = [];
 }

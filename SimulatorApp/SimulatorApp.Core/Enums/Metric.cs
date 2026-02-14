@@ -1,4 +1,4 @@
-﻿namespace SimulatorApp.Core.Models;
+﻿namespace SimulatorApp.Core.Enums;
 
 public enum Metric
 {

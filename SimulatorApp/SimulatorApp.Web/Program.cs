@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using SimulatorApp.Core.Enums;
 using SimulatorApp.Core.Models;
 using SimulatorApp.Infrastructure.Data;
 using SimulatorApp.Web.Components;
@@ -26,9 +27,9 @@ using (var scope = app.Services.CreateScope())
 
     if (!await db.Devices.AnyAsync())
     {
-        var dev0 = new Device { Model = "Climate Sensor x1402abc", Location = "livingroom", IsOnline = true };
-        var dev1 = new Device { Model = "Motion Sensor xyz123", Location = "backyard", IsOnline = true };
-        var dev2 = new Device { Model = "Unusual Sensor t900", Location = "secret room", IsOnline = true };
+        var dev0 = new Device { MAC = "F3D24C8D0EA5", Model = "Climate Sensor x1402abc", Location = "livingroom", IsOnline = true };
+        var dev1 = new Device { MAC = "56699D64012D", Model = "Motion Sensor xyz123", Location = "backyard", IsOnline = true };
+        var dev2 = new Device { MAC = "3A2CE01FE222", Model = "Unusual Sensor t900", Location = "secret room", IsOnline = true };
 
         await db.Devices.AddRangeAsync(
             dev0,
