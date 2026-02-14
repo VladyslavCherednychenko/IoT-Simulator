@@ -1,6 +1,6 @@
 ﻿using SimulatorApp.Core.Enums;
 
-namespace SimulatorApp.Core.Models;
+namespace SimulatorApp.Emulator.Models;
 
 public class VirtualSensor
 {

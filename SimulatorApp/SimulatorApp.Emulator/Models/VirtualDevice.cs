@@ -1,4 +1,4 @@
-﻿namespace SimulatorApp.Core.Models;
+﻿namespace SimulatorApp.Emulator.Models;
 
 public class VirtualDevice
 {
