@@ -1,24 +1,48 @@
-namespace SimulatorApp.Emulator
+using SimulatorApp.Emulator.Models;
+using SimulatorApp.Emulator.Mqtt;
+using SimulatorApp.Emulator.Simulation;
+
+namespace SimulatorApp.Emulator;
+
+public class Worker(ILogger<Worker> logger, IMqttService mqttService, DeviceSimulator deviceSimulator) : BackgroundService
 {
-    public class Worker : BackgroundService
+    private readonly List<VirtualDevice> _devices = DeviceRegistry.GetDevices();
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        private readonly ILogger<Worker> _logger;
-
-        public Worker(ILogger<Worker> logger)
+        try
         {
-            _logger = logger;
+            await mqttService.ConnectAsync(stoppingToken);
+            await deviceSimulator.SetAllStatusesAsync(_devices, "online", stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to connect to MQTT broker on startup.");
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        var sensorTasks = deviceSimulator.StartAll(_devices, stoppingToken).ToList();
+
+        while (!stoppingToken.IsCancellationRequested)
         {
-            while (!stoppingToken.IsCancellationRequested)
+            try
             {
-                if (_logger.IsEnabled(LogLevel.Information))
+                await mqttService.ReconnectIfNeededAsync(stoppingToken);
+
+                if (mqttService.IsConnected)
                 {
-                    _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                    await deviceSimulator.SetAllStatusesAsync(_devices, "online", stoppingToken);
                 }
-                await Task.Delay(1000, stoppingToken);
             }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Reconnection attempt failed.");
+            }
+
+            await Task.Delay(10000, stoppingToken);
         }
+
+        await deviceSimulator.SetAllStatusesAsync(_devices, "offline", stoppingToken);
+        await mqttService.DisconnectAsync(stoppingToken);
+        await Task.WhenAll(sensorTasks);
     }
 }
