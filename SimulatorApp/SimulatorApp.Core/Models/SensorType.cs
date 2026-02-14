@@ -7,5 +7,7 @@ public enum SensorType
     Humidity,
     Pressure,
     Resistance,
-    CO2
+    CO2,
+    Motion,
+    SoC
 }
