@@ -20,8 +20,8 @@ public static class TopicParser
             return null;
         }
 
-        return new ParsedTopic(MAC: parts[2], SensorType: sensorType, MessageType: parts[4]);
+        return new ParsedTopic(MAC: parts[2], Location: parts[1], SensorType: sensorType, MessageType: parts[4]);
     }
 }
 
-public record ParsedTopic(string MAC, SensorType SensorType, string MessageType);
+public record ParsedTopic(string MAC, string Location, SensorType SensorType, string MessageType);

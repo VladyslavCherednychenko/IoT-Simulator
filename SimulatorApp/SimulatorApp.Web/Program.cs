@@ -10,12 +10,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-builder.Services.AddDbContext<AppDbContext>(options =>
+builder.Services.AddDbContextFactory<AppDbContext>(options =>
 {
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"),
         npgsqlOptionsAction: npgsqlOptions => npgsqlOptions.EnableRetryOnFailure());
 });
 
+builder.Services.AddSingleton<DashboardStateService>();
 builder.Services.AddSingleton<MqttListenerService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MqttListenerService>());
 

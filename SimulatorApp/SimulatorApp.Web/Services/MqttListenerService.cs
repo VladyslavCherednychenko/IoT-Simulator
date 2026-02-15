@@ -1,10 +1,11 @@
-﻿using System.Collections.Concurrent;
-using MQTTnet;
+﻿using MQTTnet;
 using MQTTnet.Client;
 using SimulatorApp.Core.Enums;
 using SimulatorApp.Core.Models;
 using SimulatorApp.Infrastructure.Data;
 using SimulatorApp.Web.Helpers;
+using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace SimulatorApp.Web.Services;
 
@@ -14,6 +15,7 @@ public class MqttListenerService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMqttClient _client;
     private readonly MqttClientOptions _options;
+    private readonly DashboardStateService _dashboardState;
 
     // Pending records carry raw values + MAC context
     // EF entities are only created during flush once SensorId is resolved
@@ -34,10 +36,11 @@ public class MqttListenerService : BackgroundService
     private const string SimulatorStatusTopic = "simulator/status";
     private const int FlushIntervalMs = 10_000;
 
-    public MqttListenerService(ILogger<MqttListenerService> logger, IConfiguration config, IServiceScopeFactory scopeFactory)
+    public MqttListenerService(ILogger<MqttListenerService> logger, IConfiguration config, IServiceScopeFactory scopeFactory, DashboardStateService dashboardState)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
+        _dashboardState = dashboardState;
 
         var host = config["Mqtt:Host"] ?? "localhost";
         var port = int.Parse(config["Mqtt:Port"] ?? "1883");
@@ -108,6 +111,7 @@ public class MqttListenerService : BackgroundService
             if (topic == SimulatorStatusTopic)
             {
                 _logger.LogInformation("Simulator status: {Payload}", payload);
+                HandleSimulatorStatus(payload);
                 return Task.CompletedTask;
             }
 
@@ -125,10 +129,10 @@ public class MqttListenerService : BackgroundService
             switch (parsed.MessageType)
             {
                 case "telemetry":
-                    HandleTelemetry(parsed.MAC, parsed.SensorType, payload);
+                    HandleTelemetry(parsed.MAC, parsed.Location, parsed.SensorType, payload);
                     break;
                 case "status":
-                    HandleSensorStatus(parsed.MAC, parsed.SensorType, payload);
+                    HandleSensorStatus(parsed.MAC, parsed.Location, parsed.SensorType, payload);
                     break;
                 default:
                     _logger.LogWarning("Unknown message type: {Type}", parsed.MessageType);
@@ -143,13 +147,14 @@ public class MqttListenerService : BackgroundService
         return Task.CompletedTask;
     }
 
-    private void HandleTelemetry(string mac, SensorType sensorType, string payload)
+    private void HandleTelemetry(string mac, string location, SensorType sensorType, string payload)
     {
         if (sensorType == SensorType.Motion)
         {
             var triggered = PayloadParser.TryParseMotion(payload);
             if (triggered is not null)
             {
+                _dashboardState.UpdateTrigger(mac, location, sensorType, triggered.Value);
                 _stateQueue.Enqueue(new PendingState(mac, sensorType, triggered.Value, DateTime.UtcNow));
             }
             return;
@@ -158,11 +163,12 @@ public class MqttListenerService : BackgroundService
         var telemetry = PayloadParser.TryParseTelemetry(sensorType, payload, _logger);
         if (telemetry is not null)
         {
+            _dashboardState.UpdateTelemetry(mac, location, sensorType, telemetry.Value.Metric, telemetry.Value.Value);
             _telemetryQueue.Enqueue(new PendingTelemetry(mac, sensorType, telemetry.Value.Metric, telemetry.Value.Value, DateTime.UtcNow));
         }
     }
 
-    private void HandleSensorStatus(string mac, SensorType sensorType, string payload)
+    private void HandleSensorStatus(string mac, string location, SensorType sensorType, string payload)
     {
         var isOnline = PayloadParser.TryParseStatus(payload);
 
@@ -178,7 +184,17 @@ public class MqttListenerService : BackgroundService
         }
 
         _lastStatusCache[key] = isOnline.Value;
+        _dashboardState.UpdateSensorStatus(mac, location, sensorType, isOnline.Value);
         _statusQueue.Enqueue(new PendingStatus(mac, sensorType, isOnline.Value, DateTime.UtcNow));
+    }
+
+    private void HandleSimulatorStatus(string payload)
+    {
+        var json = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(payload);
+        if (json?.TryGetValue("status", out var el) == true)
+        {
+            _dashboardState.UpdateSimulatorStatus(el.GetString() == "online");
+        }
     }
 
     private async Task FlushAsync(CancellationToken ct)
