@@ -1,0 +1,181 @@
+﻿@page "/device/{MAC}"
+@using SimulatorApp.Web.Models
+@implements IDisposable
+@inject DashboardStateService DashboardState
+@inject IDbContextFactory<AppDbContext> DbFactory
+@rendermode InteractiveServer
+
+<PageTitle>@(_device?.MAC ?? MAC)</PageTitle>
+
+@if (_device is null)
+{
+    <div class="empty-state">
+        <span class="empty-icon">◎</span>
+        <p>Device not found.</p>
+        <a href="/">← Back</a>
+    </div>
+}
+else
+{
+    <div class="dashboard">
+        <header class="dashboard-header">
+            <a href="/" class="back-link">← Dashboard</a>
+            <div class="header-main">
+                <h1>@_device.MAC</h1>
+                <span class="location-tag">@_device.Location</span>
+            </div>
+            <span class="device-status-badge @(_device.IsOnline ? "online" : "offline")">
+                @(_device.IsOnline ? "online" : "offline")
+            </span>
+        </header>
+
+        <section class="section">
+            <h2 class="section-title">Sensors</h2>
+            <div class="sensor-grid">
+                @foreach (var sensor in _device.Sensors.Values)
+                {
+                    <div class="sensor-card @(sensor.IsOnline ? "online" : "offline")">
+                        <div class="sensor-card-header">
+                            <div class="status-dot"></div>
+                            <span class="sensor-type">@sensor.SensorType</span>
+                        </div>
+                        <div class="sensor-card-value">
+                            @if (sensor.LastValue.HasValue)
+                            {
+                                <span class="value">@($"{sensor.LastValue:F1}")</span>
+                                <span class="metric">@sensor.LastMetric</span>
+                            }
+                            else if (sensor.LastTriggered.HasValue)
+                            {
+                                <span class="value trigger @(sensor.LastTriggered.Value ? "active" : "")">
+                                    @(sensor.LastTriggered.Value ? "triggered" : "idle")
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="no-data">no data</span>
+                            }
+                        </div>
+                        <div class="sensor-card-footer">
+                            @if (sensor.LastSeen != default)
+                            {
+                                @sensor.LastSeen.ToLocalTime().ToString("HH:mm:ss")
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="section">
+            <h2 class="section-title">Telemetry — Last Hour</h2>
+            @if (_telemetry.Any())
+            {
+                <div class="chart-area">
+                    <!-- Chart placeholder: replace with your charting lib (e.g. ApexCharts, ChartJs) -->
+                    <table class="telemetry-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Metric</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var log in _telemetry.OrderByDescending(t => t.Timestamp).Take(50))
+                            {
+                                <tr>
+                                    <td>@log.Timestamp.ToLocalTime().ToString("HH:mm:ss")</td>
+                                    <td>@log.Metric</td>
+                                    <td>@($"{log.Value:F1}")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else
+            {
+                <p class="muted">No telemetry data for the last hour.</p>
+            }
+        </section>
+
+        <section class="section">
+            <h2 class="section-title">State Log</h2>
+            @if (_stateLog.Any())
+            {
+                <table class="telemetry-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>State</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var log in _stateLog.OrderByDescending(s => s.Timestamp).Take(20))
+                        {
+                            <tr>
+                                <td>@log.Timestamp.ToLocalTime().ToString("HH:mm:ss")</td>
+                                <td class="@(log.IsTriggered ? "triggered" : "idle")">
+                                    @(log.IsTriggered ? "Triggered" : "Idle")
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <p class="muted">No state changes recorded.</p>
+            }
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter] public string MAC { get; set; } = default!;
+
+    private DeviceState? _device;
+    private List<TelemetryLog> _telemetry = [];
+    private List<StateChangeLog> _stateLog = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _device = DashboardState.GetDevice(MAC);
+        DashboardState.OnChange += OnStateChanged;
+        await LoadHistoryAsync();
+    }
+
+    private void OnStateChanged()
+    {
+        _device = DashboardState.GetDevice(MAC);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        var since = DateTime.UtcNow.AddHours(-1);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var sensorIds = await db.Sensors
+            .Include(s => s.Device)
+            .Where(s => s.Device.MAC == MAC)
+            .Select(s => s.SensorId)
+            .ToListAsync();
+
+        if (sensorIds.Count == 0) return;
+
+        _telemetry = await db.TelemetryLogs
+            .Where(t => sensorIds.Contains(t.SensorId) && t.Timestamp >= since)
+            .OrderByDescending(t => t.Timestamp)
+            .ToListAsync();
+
+        _stateLog = await db.StateChangeLogs
+            .Where(s => sensorIds.Contains(s.SensorId) && s.Timestamp >= since)
+            .OrderByDescending(s => s.Timestamp)
+            .ToListAsync();
+    }
+
+    public void Dispose() => DashboardState.OnChange -= OnStateChanged;
+}

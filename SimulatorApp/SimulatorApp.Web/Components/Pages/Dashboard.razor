@@ -1,0 +1,84 @@
+﻿@page "/"
+@using SimulatorApp.Web.Models
+@implements IDisposable
+@inject DashboardStateService DashboardState
+@rendermode InteractiveServer
+
+<PageTitle>Dashboard</PageTitle>
+
+<div class="dashboard">
+    <header class="dashboard-header">
+        <h1>IoT Dashboard</h1>
+        <span class="device-count">@_devices.Count device@(_devices.Count == 1 ? "" : "s")</span>
+    </header>
+
+    @if (!_devices.Any())
+    {
+        <div class="empty-state">
+            <span class="empty-icon">◎</span>
+            <p>Waiting for devices...</p>
+        </div>
+    }
+    else
+    {
+        <div class="device-grid">
+            @foreach (var device in _devices.Values.OrderBy(d => d.Location))
+            {
+                <a class="device-card @(device.IsOnline ? "online" : "offline")" href="/device/@device.MAC">
+                    <div class="card-header">
+                        <div class="status-dot"></div>
+                        <span class="device-mac">@device.MAC</span>
+                        <span class="device-status">@(device.IsOnline ? "online" : "offline")</span>
+                    </div>
+                    <div class="card-location">@device.Location</div>
+                    <div class="sensor-list">
+                        @foreach (var sensor in device.Sensors.Values)
+                        {
+                            <div class="sensor-row">
+                                <span class="sensor-type">@sensor.SensorType</span>
+                                <span class="sensor-value">
+                                    @if (sensor.LastValue.HasValue)
+                                    {
+                                        @($"{sensor.LastValue:F1}")
+                                    }
+                                    else if (sensor.LastTriggered.HasValue)
+                                    {
+                                        @(sensor.LastTriggered.Value ? "triggered" : "idle")
+                                    }
+                                    else
+                                    {
+                                        <span class="no-data">—</span>
+                                    }
+                                </span>
+                            </div>
+                        }
+                    </div>
+                    <div class="card-footer">
+                        @if (device.LastSeen != default)
+                        {
+                            <span>Last seen @device.LastSeen.ToLocalTime().ToString("HH:mm:ss")</span>
+                        }
+                    </div>
+                </a>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyDictionary<string, DeviceState> _devices = new Dictionary<string, DeviceState>();
+
+    protected override void OnInitialized()
+    {
+        _devices = DashboardState.Devices;
+        DashboardState.OnChange += OnStateChanged;
+    }
+
+    private void OnStateChanged()
+    {
+        _devices = DashboardState.Devices;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => DashboardState.OnChange -= OnStateChanged;
+}
