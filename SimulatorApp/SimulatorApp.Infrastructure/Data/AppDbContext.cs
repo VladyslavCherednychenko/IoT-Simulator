@@ -12,6 +12,8 @@ public class AppDbContext : DbContext
     public DbSet<StateChangeLog> StateChangeLogs => Set<StateChangeLog>();
     public DbSet<StatusChangeLog> StatusChangeLogs => Set<StatusChangeLog>();
     public DbSet<TelemetryLog> TelemetryLogs => Set<TelemetryLog>();
+    public DbSet<AlertRule> AlertRules => Set<AlertRule>();
+    public DbSet<AlertLog> AlertLogs => Set<AlertLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -50,6 +52,26 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<TelemetryLog>()
             .HasOne(e => e.Sensor)
             .WithMany(e => e.Telemetries)
+            .HasForeignKey(e => e.SensorId);
+
+        modelBuilder.Entity<AlertRule>()
+            .HasKey(e => e.AlertRuleId);
+        modelBuilder.Entity<AlertRule>()
+            .HasOne(e => e.Sensor)
+            .WithMany()
+            .HasForeignKey(e => e.SensorId);
+
+        modelBuilder.Entity<AlertLog>()
+            .HasKey(e => e.AlertLogId);
+        modelBuilder.Entity<AlertLog>()
+            .HasIndex(e => new { e.SensorId, e.Timestamp });
+        modelBuilder.Entity<AlertLog>()
+            .HasOne(e => e.AlertRule)
+            .WithMany()
+            .HasForeignKey(e => e.AlertRuleId);
+        modelBuilder.Entity<AlertLog>()
+            .HasOne(e => e.Sensor)
+            .WithMany()
             .HasForeignKey(e => e.SensorId);
     }
 }
