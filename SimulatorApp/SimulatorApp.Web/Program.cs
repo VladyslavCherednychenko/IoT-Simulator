@@ -18,9 +18,12 @@ builder.Services.AddDbContextFactory<AppDbContext>(options =>
 
 builder.Services.AddSingleton<DashboardStateService>();
 builder.Services.AddSingleton<MqttListenerService>();
+builder.Services.AddSingleton<AlertEvaluatorService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MqttListenerService>());
 
 var app = builder.Build();
+
+await app.Services.GetRequiredService<AlertEvaluatorService>().InitializeAsync();
 
 using (var scope = app.Services.CreateScope())
 {

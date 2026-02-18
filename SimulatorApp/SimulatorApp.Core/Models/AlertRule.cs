@@ -10,8 +10,6 @@ public class AlertRule
 
     public AlertType AlertType { get; set; }
 
-    public double? ThresholdValue { get; set; }
-
     public double? RangeMin { get; set; }
 
     public double? RangeMax { get; set; }
