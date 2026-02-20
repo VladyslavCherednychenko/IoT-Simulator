@@ -24,12 +24,11 @@ public class MqttListenerService : BackgroundService
     private sealed record PendingTelemetry(string MAC, SensorType SensorType, Metric Metric, double Value, DateTime Timestamp);
     private sealed record PendingStatus(string MAC, SensorType SensorType, bool IsOnline, DateTime Timestamp);
     private sealed record PendingState(string MAC, SensorType SensorType, bool IsTriggered, DateTime Timestamp);
-    private sealed record PendingAlert(string MAC, SensorType SensorType, double? telemetry, bool? isTriggered, bool? isOnline);
 
     private readonly ConcurrentQueue<PendingTelemetry> _telemetryQueue = new();
     private readonly ConcurrentQueue<PendingStatus> _statusQueue = new();
     private readonly ConcurrentQueue<PendingState> _stateQueue = new();
-    private readonly ConcurrentQueue<PendingAlert> _alertQueue = new();
+    private readonly ConcurrentQueue<AlertLog> _alertLogQueue = new();
 
     // Cache (MAC + SensorType) -> LastStatus
     // to avoid repeated DB lookups per flush and store only status transitions
@@ -165,7 +164,6 @@ public class MqttListenerService : BackgroundService
             if (triggered is not null)
             {
                 _dashboardState.UpdateTrigger(mac, location, sensorType, triggered.Value);
-                _alertQueue.Enqueue(new PendingAlert(mac, sensorType, null, triggered.Value, null));
                 _stateQueue.Enqueue(new PendingState(mac, sensorType, triggered.Value, DateTime.UtcNow));
             }
             return;
@@ -175,7 +173,6 @@ public class MqttListenerService : BackgroundService
         if (telemetry is not null)
         {
             _dashboardState.UpdateTelemetry(mac, location, sensorType, telemetry.Value.Metric, telemetry.Value.Value);
-            _alertQueue.Enqueue(new PendingAlert(mac, sensorType, telemetry.Value.Value, null, null));
             _telemetryQueue.Enqueue(new PendingTelemetry(mac, sensorType, telemetry.Value.Metric, telemetry.Value.Value, DateTime.UtcNow));
         }
     }
@@ -197,7 +194,6 @@ public class MqttListenerService : BackgroundService
 
         _lastStatusCache[key] = isOnline.Value;
         _dashboardState.UpdateSensorStatus(mac, location, sensorType, isOnline.Value);
-        _alertQueue.Enqueue(new PendingAlert(mac, sensorType, null, null, isOnline.Value));
         _statusQueue.Enqueue(new PendingStatus(mac, sensorType, isOnline.Value, DateTime.UtcNow));
     }
 
@@ -220,7 +216,6 @@ public class MqttListenerService : BackgroundService
         var telemetryBatch = ConcurrentQueueHelper.DrainQueue(_telemetryQueue);
         var statusBatch = ConcurrentQueueHelper.DrainQueue(_statusQueue);
         var stateBatch = ConcurrentQueueHelper.DrainQueue(_stateQueue);
-        var alertBatch = ConcurrentQueueHelper.DrainQueue(_alertQueue);
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -230,7 +225,7 @@ public class MqttListenerService : BackgroundService
             await FlushTelemetryAsync(db, telemetryBatch, ct);
             await FlushStatusAsync(db, statusBatch, ct);
             await FlushStateAsync(db, stateBatch, ct);
-            await FlushAlertsAsync(db, alertBatch, ct);
+            await FlushAlertsAsync(db, ct);
             await db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
@@ -238,10 +233,10 @@ public class MqttListenerService : BackgroundService
             _logger.LogError(ex, "Flush failed - re-enqueuing batch for retry.");
 
             // Re-enqueue entire batch (retry next cycle)
+            // Note: alerts are NOT re-enqueued since they are derived from telemetry/status/state
             foreach (var item in telemetryBatch) _telemetryQueue.Enqueue(item);
             foreach (var item in statusBatch) _statusQueue.Enqueue(item);
             foreach (var item in stateBatch) _stateQueue.Enqueue(item);
-            foreach (var item in alertBatch) _alertQueue.Enqueue(item);
         }
     }
 
@@ -264,6 +259,12 @@ public class MqttListenerService : BackgroundService
                 Value = pending.Value,
                 Timestamp = pending.Timestamp
             }, ct);
+
+            var alertLogs = _alertEvaluator.EvaluateTelemetry(sensorId.Value, pending.Value);
+            foreach (var log in alertLogs)
+            {
+                _alertLogQueue.Enqueue(log);
+            }
         }
     }
 
@@ -285,6 +286,12 @@ public class MqttListenerService : BackgroundService
                 IsOnline = pending.IsOnline,
                 Timestamp = pending.Timestamp
             }, ct);
+
+            var alertLogs = _alertEvaluator.EvaluateOffline(sensorId.Value, pending.IsOnline);
+            foreach (var log in alertLogs)
+            {
+                _alertLogQueue.Enqueue(log);
+            }
         }
     }
 
@@ -306,41 +313,25 @@ public class MqttListenerService : BackgroundService
                 IsTriggered = pending.IsTriggered,
                 Timestamp = pending.Timestamp
             }, ct);
+
+            var alertLogs = _alertEvaluator.EvaluateTrigger(sensorId.Value, pending.IsTriggered);
+            foreach (var log in alertLogs)
+            {
+                _alertLogQueue.Enqueue(log);
+            }
         }
     }
 
-    // WIP, it should work for now, but definitely needs a refactor
-    private async Task FlushAlertsAsync(AppDbContext db, List<PendingAlert> batch, CancellationToken ct)
+    private async Task FlushAlertsAsync(AppDbContext db, CancellationToken ct)
     {
 
-        List<AlertLog> _alertList = new();
-        foreach (var pending in batch)
+        var batch = ConcurrentQueueHelper.DrainQueue(_alertLogQueue);
+
+        if (batch.Count == 0)
         {
-            var sensorId = await SensorIdResolver.ResolveSensorIdAsync(db, pending.MAC, pending.SensorType, _logger, ct);
-
-            // Skip if sensor is not registered yet
-            if (sensorId is null)
-            {
-                continue;
-            }
-
-            if (pending.telemetry != null)
-            {
-                var alertLogs = _alertEvaluator.EvaluateTelemetry((long)sensorId, (double)pending.telemetry);
-                _alertList.AddRange(alertLogs);
-            }
-            else if (pending.isTriggered != null)
-            {
-                var alertLogs = _alertEvaluator.EvaluateTrigger((long)sensorId, (bool)pending.isTriggered);
-                _alertList.AddRange(alertLogs);
-            }
-            else if (pending.isOnline != null)
-            {
-                var alertLogs = _alertEvaluator.EvaluateOffline((long)sensorId, (bool)pending.isOnline);
-                _alertList.AddRange(alertLogs);
-            }
+            return;
         }
 
-        await db.AlertLogs.AddRangeAsync(_alertList, ct);
+        await db.AlertLogs.AddRangeAsync(batch, ct);
     }
 }
