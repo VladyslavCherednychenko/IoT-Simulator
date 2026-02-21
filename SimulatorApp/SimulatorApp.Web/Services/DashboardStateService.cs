@@ -33,6 +33,8 @@ public class DashboardStateService
             sensor.LastMetric = metric;
             sensor.LastSeen = DateTime.UtcNow;
             device.LastSeen = DateTime.UtcNow;
+            sensor.IsOnline = true;
+            device.IsOnline = true;
         }
         OnChange?.Invoke();
     }
@@ -46,6 +48,8 @@ public class DashboardStateService
             sensor.LastTriggered = isTriggered;
             sensor.LastSeen = DateTime.UtcNow;
             device.LastSeen = DateTime.UtcNow;
+            sensor.IsOnline = true;
+            device.IsOnline = true;
         }
         OnChange?.Invoke();
     }
@@ -74,7 +78,9 @@ public class DashboardStateService
             {
                 device.IsOnline = isOnline;
                 foreach (var sensor in device.Sensors.Values)
+                {
                     sensor.IsOnline = isOnline;
+                }
             }
         }
         OnChange?.Invoke();
