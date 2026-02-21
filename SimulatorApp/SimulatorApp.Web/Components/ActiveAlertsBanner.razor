@@ -1,0 +1,37 @@
+﻿@inject IDbContextFactory<AppDbContext> DbFactory
+@inject NavigationManager Nav
+@implements IDisposable
+
+@if (_unreadCount > 0)
+{
+    <div class="alerts-notification" @onclick="NavigateToAlerts">
+        <span class="alert-icon" aria-hidden="true"></span>
+        <span class="alert-text">@_unreadCount unread alert@(_unreadCount == 1 ? "" : "s")</span>
+        <span class="alert-action">Click to view alerts</span>
+    </div>
+}
+
+@code {
+    private int _unreadCount;
+    private Timer? _refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadCountAsync();
+        _refreshTimer = new Timer(async _ => await InvokeAsync(async () =>
+        {
+            await LoadCountAsync();
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+    }
+
+    private async Task LoadCountAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _unreadCount = await db.AlertLogs.CountAsync(a => !a.IsRead);
+    }
+
+    private void NavigateToAlerts() => Nav.NavigateTo("/alerts");
+
+    public void Dispose() => _refreshTimer?.Dispose();
+}

@@ -36,6 +36,8 @@ public sealed class AlertEvaluatorService
         }
     }
 
+    public async Task ReloadRulesAsync() => await LoadRulesAsync();
+
     public List<AlertLog> EvaluateTelemetry(long sensorId, double value)
     {
         List<AlertRule>? rules;
@@ -50,11 +52,11 @@ public sealed class AlertEvaluatorService
         var logs = new List<AlertLog>();
         foreach (var rule in rules)
         {
-            bool shouldTrigger = rule.AlertType switch
+            bool shouldTrigger = false;
+            if ((rule.RangeMin.HasValue && value < rule.RangeMin.Value) || (rule.RangeMax.HasValue && value > rule.RangeMax.Value))
             {
-                AlertType.Range => value < rule.RangeMin || value > rule.RangeMax,
-                _ => false
-            };
+                shouldTrigger = true;
+            }
 
             if (shouldTrigger)
             {
