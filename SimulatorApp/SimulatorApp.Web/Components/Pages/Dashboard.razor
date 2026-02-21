@@ -12,6 +12,8 @@
         <span class="device-count">@_devices.Count device@(_devices.Count == 1 ? "" : "s")</span>
     </header>
 
+    <ActiveAlertsBanner />
+
     @if (!_devices.Any())
     {
         <div class="empty-state">

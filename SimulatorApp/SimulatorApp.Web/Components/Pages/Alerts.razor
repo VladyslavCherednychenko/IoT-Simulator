@@ -1,0 +1,474 @@
+﻿@page "/alerts"
+@rendermode InteractiveServer
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject AlertEvaluatorService AlertEvaluator
+
+<PageTitle>Alerts</PageTitle>
+
+<div class="dashboard">
+    <header class="dashboard-header">
+        <h1>Alerts</h1>
+        <div class="header-actions">
+            <button class="btn-secondary" @onclick="ToggleRulesView">
+                @(_showRules ? "View Logs" : "Manage Rules")
+            </button>
+        </div>
+    </header>
+
+    @if (_showRules)
+    {
+        <!-- Alert Rules Management -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Alert Rules</h2>
+                <button class="btn-primary" @onclick="ShowCreateModal">+ New Rule</button>
+            </div>
+
+            @if (!_rules.Any())
+            {
+                <p class="muted">No alert rules configured.</p>
+            }
+            else
+            {
+                <table class="telemetry-table">
+                    <thead>
+                        <tr>
+                            <th>Device</th>
+                            <th>Sensor</th>
+                            <th>Type</th>
+                            <th>Condition</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var rule in _rules)
+                        {
+                            <tr>
+                                <td>@rule.Sensor.Device.MAC</td>
+                                <td>@rule.Sensor.SensorType</td>
+                                <td>@rule.AlertType</td>
+                                <td>@FormatCondition(rule)</td>
+                                <td>
+                                    <span class="status-badge @(rule.IsEnabled ? "enabled" : "disabled")">
+                                        @(rule.IsEnabled ? "enabled" : "disabled")
+                                    </span>
+                                </td>
+                                <td>
+                                    <button class="btn-small" @onclick="() => ToggleRule(rule)">
+                                        @(rule.IsEnabled ? "Disable" : "Enable")
+                                    </button>
+                                    <button class="btn-small" @onclick="() => ShowEditModal(rule)">Edit</button>
+                                    <button class="btn-small btn-danger" @onclick="() => DeleteRule(rule)">Delete</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+    else
+    {
+        <!-- Alert Logs with Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <label>Show</label>
+                <InputSelect @bind-Value="_showRead">
+                    <option value="false">Unread only</option>
+                    <option value="true">All</option>
+                </InputSelect>
+            </div>
+            <div class="filter-group">
+                <label>Device</label>
+                <select @bind="_filterDevice">
+                    <option value="">All devices</option>
+                    @foreach (var mac in _deviceMacs)
+                    {
+                        <option value="@mac">@mac</option>
+                    }
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Sensor Type</label>
+                <select @bind="_filterSensorType">
+                    <option value="">All sensors</option>
+                    @foreach (var type in Enum.GetValues<SensorType>())
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </div>
+            <button class="btn-secondary" @onclick="ApplyFilters">Apply</button>
+            <button class="btn-secondary" @onclick="MarkAllRead">Mark all as read</button>
+        </div>
+
+        <div class="table-container">
+            @if (!_filteredLogs.Any())
+            {
+                <p class="muted">No alerts found.</p>
+            }
+            else
+            {
+                <table class="telemetry-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Device</th>
+                            <th>Sensor</th>
+                            <th>Alert Type</th>
+                            <th>Value</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var log in _filteredLogs)
+                        {
+                            <tr class="@(log.IsRead ? "read" : "unread")">
+                                <td>@log.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                <td>@log.Sensor.Device.MAC</td>
+                                <td>@log.Sensor.SensorType</td>
+                                <td>@log.AlertRule.AlertType</td>
+                                <td>@(log.TriggerValue.HasValue ? $"{log.TriggerValue:F1}" : "—")</td>
+                                <td>
+                                    @if (log.IsRead)
+                                    {
+                                        <span class="status-badge disabled">read</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-badge enabled">unread</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (!log.IsRead)
+                                    {
+                                        <button class="btn-small" @onclick="() => MarkAsRead(log.AlertLogId)">Mark read</button>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn-small" @onclick="() => MarkAsUnread(log.AlertLogId)">Mark unread</button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+</div>
+
+<!-- Create Rule Modal -->
+@if (_showCreateModal)
+{
+    <div class="modal-overlay" @onclick="HideCreateModal">
+        <div class="modal-content" @onclick:stopPropagation>
+            <h2>Create Alert Rule</h2>
+            <EditForm Model="_newRule" OnValidSubmit="CreateRule">
+                <div class="form-group">
+                    <label>Device</label>
+                    <select @bind="_selectedDeviceId" @bind:after="OnDeviceSelected">
+                        <option value="0">Select device...</option>
+                        @foreach (var device in _devices)
+                        {
+                            <option value="@device.DeviceId">@device.MAC - @device.Location</option>
+                        }
+                    </select>
+                </div>
+
+                @if (_selectedDeviceId > 0 && _sensorsForDevice.Any())
+                {
+                    <div class="form-group">
+                        <label>Sensor</label>
+                        <select @bind="_newRule.SensorId">
+                            <option value="0">Select sensor...</option>
+                            @foreach (var sensor in _sensorsForDevice)
+                            {
+                                <option value="@sensor.SensorId">@sensor.SensorType - @sensor.Name</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Alert Type</label>
+                        <select @bind="_newRule.AlertType">
+                            <option value="@AlertType.None">Select type...</option>
+                            <option value="@AlertType.Range">Range (outside min/max)</option>
+                            <option value="@AlertType.Trigger">Trigger (boolean)</option>
+                            <option value="@AlertType.Offline">Offline</option>
+                        </select>
+                    </div>
+
+                    @if (_newRule.AlertType == AlertType.Range)
+                    {
+                        <div class="form-group">
+                            <label>Min Value</label>
+                            <input type="number" step="0.1" @bind="_newRule.RangeMin" placeholder="Leave empty for no minimum" />
+                        </div>
+                        <div class="form-group">
+                            <label>Max Value</label>
+                            <input type="number" step="0.1" @bind="_newRule.RangeMax" placeholder="Leave empty for no maximum" />
+                        </div>
+                    }
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">Create</button>
+                        <button type="button" class="btn-secondary" @onclick="HideCreateModal">Cancel</button>
+                    </div>
+                }
+            </EditForm>
+        </div>
+    </div>
+}
+
+<!-- Edit Rule Modal -->
+@if (_showEditModal && _editingRule is not null)
+{
+    <div class="modal-overlay" @onclick="HideEditModal">
+        <div class="modal-content" @onclick:stopPropagation>
+            <h2>Edit Alert Rule</h2>
+            <EditForm Model="_editingRule" OnValidSubmit="UpdateRule">
+                <div class="form-group">
+                    <label>Device</label>
+                    <input type="text" value="@_editingRule.Sensor.Device.MAC" disabled />
+                </div>
+
+                <div class="form-group">
+                    <label>Sensor</label>
+                    <input type="text" value="@_editingRule.Sensor.SensorType" disabled />
+                </div>
+
+                <div class="form-group">
+                    <label>Alert Type</label>
+                    <select @bind="_editingRule.AlertType" disabled>
+                        <option value="@AlertType.Range">Range</option>
+                        <option value="@AlertType.Trigger">Trigger</option>
+                        <option value="@AlertType.Offline">Offline</option>
+                    </select>
+                </div>
+
+                @if (_editingRule.AlertType == AlertType.Range)
+                {
+                    <div class="form-group">
+                        <label>Min Value</label>
+                        <input type="number" step="0.1" @bind="_editingRule.RangeMin" placeholder="Leave empty for no minimum" />
+                    </div>
+                    <div class="form-group">
+                        <label>Max Value</label>
+                        <input type="number" step="0.1" @bind="_editingRule.RangeMax" placeholder="Leave empty for no maximum" />
+                    </div>
+                }
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" @bind="_editingRule.IsEnabled" />
+                        Enabled
+                    </label>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Update</button>
+                    <button type="button" class="btn-secondary" @onclick="HideEditModal">Cancel</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _showRules = false;
+    private List<AlertRule> _rules = [];
+    private List<AlertLog> _logs = [];
+    private List<AlertLog> _filteredLogs = [];
+    private List<Device> _devices = [];
+    private List<string> _deviceMacs = [];
+    private List<Sensor> _sensorsForDevice = [];
+
+    // Filters
+    private bool _showRead = false;
+    private string _filterDevice = "";
+    private string _filterSensorType = "";
+
+    // Modal state
+    private bool _showCreateModal = false;
+    private AlertRule _newRule = new() { AlertType = AlertType.None, IsEnabled = true, CreatedAt = DateTime.UtcNow };
+    private long _selectedDeviceId = 0;
+
+    // Edit Alerts
+    private bool _showEditModal = false;
+    private AlertRule? _editingRule = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _rules = await db.AlertRules
+            .Include(r => r.Sensor)
+            .ThenInclude(s => s.Device)
+            .OrderByDescending(r => r.CreatedAt)
+            .ToListAsync();
+
+        _logs = await db.AlertLogs
+            .Include(l => l.Sensor)
+            .ThenInclude(s => s.Device)
+            .Include(l => l.AlertRule)
+            .OrderByDescending(l => l.Timestamp)
+            .ToListAsync();
+
+        _deviceMacs = _logs.Select(l => l.Sensor.Device.MAC).Distinct().OrderBy(m => m).ToList();
+        _devices = await db.Devices.ToListAsync();
+
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        _filteredLogs = _logs
+            .Where(l => _showRead || !l.IsRead)
+            .Where(l => string.IsNullOrEmpty(_filterDevice) || l.Sensor.Device.MAC == _filterDevice)
+            .Where(l => string.IsNullOrEmpty(_filterSensorType) || l.Sensor.SensorType.ToString() == _filterSensorType)
+            .ToList();
+    }
+
+    private async Task MarkAsRead(long alertLogId)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var alert = await db.AlertLogs.FindAsync(alertLogId);
+        if (alert is not null)
+        {
+            alert.IsRead = true;
+            await db.SaveChangesAsync();
+            await LoadDataAsync();
+        }
+    }
+
+    private async Task MarkAllRead()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.AlertLogs
+            .Where(a => !a.IsRead)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsRead, true));
+        await LoadDataAsync();
+    }
+
+    private void ToggleRulesView()
+    {
+        _showRules = !_showRules;
+    }
+
+    private async Task OnDeviceSelected()
+    {
+        if (_selectedDeviceId == 0)
+        {
+            _sensorsForDevice = [];
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _sensorsForDevice = await db.Sensors
+            .Where(s => s.DeviceId == _selectedDeviceId)
+            .ToListAsync();
+    }
+
+    private void ShowCreateModal()
+    {
+        _newRule = new() { AlertType = AlertType.None, IsEnabled = true, CreatedAt = DateTime.UtcNow };
+        _selectedDeviceId = 0;
+        _sensorsForDevice = [];
+        _showCreateModal = true;
+    }
+
+    private void HideCreateModal() => _showCreateModal = false;
+
+    private async Task CreateRule()
+    {
+        if (_newRule.SensorId == 0 || _newRule.AlertType == AlertType.None) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.AlertRules.AddAsync(_newRule);
+        await db.SaveChangesAsync();
+
+        await AlertEvaluator.ReloadRulesAsync();
+        await LoadDataAsync();
+        HideCreateModal();
+    }
+
+    private async Task ToggleRule(AlertRule rule)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var tracked = await db.AlertRules.FindAsync(rule.AlertRuleId);
+        if (tracked is null) return;
+
+        tracked.IsEnabled = !tracked.IsEnabled;
+        await db.SaveChangesAsync();
+
+        await AlertEvaluator.ReloadRulesAsync();
+        await LoadDataAsync();
+    }
+
+    private async Task DeleteRule(AlertRule rule)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.AlertRules.Remove(rule);
+        await db.SaveChangesAsync();
+
+        await AlertEvaluator.ReloadRulesAsync();
+        await LoadDataAsync();
+    }
+
+    private string FormatCondition(AlertRule rule) => rule.AlertType switch
+    {
+        AlertType.Range => $"< {rule.RangeMin:F1} or > {rule.RangeMax:F1}",
+        AlertType.Trigger => "When triggered",
+        AlertType.Offline => "When offline",
+        _ => "—"
+    };
+
+    private void ShowEditModal(AlertRule rule)
+    {
+        _editingRule = rule;
+        _selectedDeviceId = rule.Sensor.DeviceId;
+        _sensorsForDevice = [rule.Sensor];
+        _showEditModal = true;
+    }
+
+    private void HideEditModal() => _showEditModal = false;
+
+    private async Task UpdateRule()
+    {
+        if (_editingRule is null) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var tracked = await db.AlertRules.FindAsync(_editingRule.AlertRuleId);
+        if (tracked is null) return;
+
+        tracked.AlertType = _editingRule.AlertType;
+        tracked.RangeMin = _editingRule.RangeMin;
+        tracked.RangeMax = _editingRule.RangeMax;
+        tracked.IsEnabled = _editingRule.IsEnabled;
+
+        await db.SaveChangesAsync();
+        await AlertEvaluator.ReloadRulesAsync();
+        await LoadDataAsync();
+        HideEditModal();
+    }
+
+    private async Task MarkAsUnread(long alertLogId)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var alert = await db.AlertLogs.FindAsync(alertLogId);
+        if (alert is not null)
+        {
+            alert.IsRead = false;
+            await db.SaveChangesAsync();
+            await LoadDataAsync();
+        }
+    }
+}

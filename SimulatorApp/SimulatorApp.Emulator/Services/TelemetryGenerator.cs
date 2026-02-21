@@ -14,7 +14,7 @@ public static class TelemetryGenerator
 
         if (sensor.SensorType is SensorType.Motion)
         {
-            var state = _rng.Next(0, 2) > 0;
+            var state = _rng.Next(0, 101) < 7;
             data.Add(sensor.SensorType.ToString(), state);
         }
         else
