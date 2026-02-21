@@ -1,4 +1,5 @@
-﻿using MQTTnet;
+﻿using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using MQTTnet;
 using MQTTnet.Client;
 using SimulatorApp.Core.Enums;
 using SimulatorApp.Core.Models;
@@ -16,16 +17,18 @@ public class MqttListenerService : BackgroundService
     private readonly IMqttClient _client;
     private readonly MqttClientOptions _options;
     private readonly DashboardStateService _dashboardState;
+    private readonly AlertEvaluatorService _alertEvaluator;
 
     // Pending records carry raw values + MAC context
     // EF entities are only created during flush once SensorId is resolved
-    private record PendingTelemetry(string MAC, SensorType SensorType, Metric Metric, double Value, DateTime Timestamp);
-    private record PendingStatus(string MAC, SensorType SensorType, bool IsOnline, DateTime Timestamp);
-    private record PendingState(string MAC, SensorType SensorType, bool IsTriggered, DateTime Timestamp);
+    private sealed record PendingTelemetry(string MAC, SensorType SensorType, Metric Metric, double Value, DateTime Timestamp);
+    private sealed record PendingStatus(string MAC, SensorType SensorType, bool IsOnline, DateTime Timestamp);
+    private sealed record PendingState(string MAC, SensorType SensorType, bool IsTriggered, DateTime Timestamp);
 
     private readonly ConcurrentQueue<PendingTelemetry> _telemetryQueue = new();
     private readonly ConcurrentQueue<PendingStatus> _statusQueue = new();
     private readonly ConcurrentQueue<PendingState> _stateQueue = new();
+    private readonly ConcurrentQueue<AlertLog> _alertLogQueue = new();
 
     // Cache (MAC + SensorType) -> LastStatus
     // to avoid repeated DB lookups per flush and store only status transitions
@@ -36,11 +39,17 @@ public class MqttListenerService : BackgroundService
     private const string SimulatorStatusTopic = "simulator/status";
     private const int FlushIntervalMs = 10_000;
 
-    public MqttListenerService(ILogger<MqttListenerService> logger, IConfiguration config, IServiceScopeFactory scopeFactory, DashboardStateService dashboardState)
+    public MqttListenerService(
+        ILogger<MqttListenerService> logger,
+        IConfiguration config,
+        IServiceScopeFactory scopeFactory,
+        DashboardStateService dashboardState,
+        AlertEvaluatorService alertEvaluator)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _dashboardState = dashboardState;
+        _alertEvaluator = alertEvaluator;
 
         var host = config["Mqtt:Host"] ?? "localhost";
         var port = int.Parse(config["Mqtt:Port"] ?? "1883");
@@ -112,12 +121,12 @@ public class MqttListenerService : BackgroundService
             {
                 _logger.LogInformation("Simulator status: {Payload}", payload);
                 HandleSimulatorStatus(payload);
-                return Task.CompletedTask;
+                return Task.CompletedTask; ;
             }
 
             if (!topic.StartsWith(HomePrefix))
             {
-                return Task.CompletedTask;
+                return Task.CompletedTask; ;
             }
 
             var parsed = TopicParser.TryParse(topic, _logger);
@@ -216,6 +225,7 @@ public class MqttListenerService : BackgroundService
             await FlushTelemetryAsync(db, telemetryBatch, ct);
             await FlushStatusAsync(db, statusBatch, ct);
             await FlushStateAsync(db, stateBatch, ct);
+            await FlushAlertsAsync(db, ct);
             await db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
@@ -223,6 +233,7 @@ public class MqttListenerService : BackgroundService
             _logger.LogError(ex, "Flush failed - re-enqueuing batch for retry.");
 
             // Re-enqueue entire batch (retry next cycle)
+            // Note: alerts are NOT re-enqueued since they are derived from telemetry/status/state
             foreach (var item in telemetryBatch) _telemetryQueue.Enqueue(item);
             foreach (var item in statusBatch) _statusQueue.Enqueue(item);
             foreach (var item in stateBatch) _stateQueue.Enqueue(item);
@@ -248,6 +259,12 @@ public class MqttListenerService : BackgroundService
                 Value = pending.Value,
                 Timestamp = pending.Timestamp
             }, ct);
+
+            var alertLogs = _alertEvaluator.EvaluateTelemetry(sensorId.Value, pending.Value);
+            foreach (var log in alertLogs)
+            {
+                _alertLogQueue.Enqueue(log);
+            }
         }
     }
 
@@ -269,6 +286,12 @@ public class MqttListenerService : BackgroundService
                 IsOnline = pending.IsOnline,
                 Timestamp = pending.Timestamp
             }, ct);
+
+            var alertLogs = _alertEvaluator.EvaluateOffline(sensorId.Value, pending.IsOnline);
+            foreach (var log in alertLogs)
+            {
+                _alertLogQueue.Enqueue(log);
+            }
         }
     }
 
@@ -290,6 +313,25 @@ public class MqttListenerService : BackgroundService
                 IsTriggered = pending.IsTriggered,
                 Timestamp = pending.Timestamp
             }, ct);
+
+            var alertLogs = _alertEvaluator.EvaluateTrigger(sensorId.Value, pending.IsTriggered);
+            foreach (var log in alertLogs)
+            {
+                _alertLogQueue.Enqueue(log);
+            }
         }
+    }
+
+    private async Task FlushAlertsAsync(AppDbContext db, CancellationToken ct)
+    {
+
+        var batch = ConcurrentQueueHelper.DrainQueue(_alertLogQueue);
+
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
+        await db.AlertLogs.AddRangeAsync(batch, ct);
     }
 }
